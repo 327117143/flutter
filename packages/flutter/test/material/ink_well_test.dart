@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// @dart = 2.8
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -311,6 +313,36 @@ void main() {
     final RenderObject inkFeatures = tester.allRenderObjects.firstWhere((RenderObject object) => object.runtimeType.toString() == '_RenderInkFeatures');
     expect(inkFeatures, paints..circle(x: 50, y: 50, color: splashColor));
     await gesture.up();
+  });
+
+  testWidgets('ink response uses radius for focus highlight', (WidgetTester tester) async {
+    FocusManager.instance.highlightStrategy = FocusHighlightStrategy.alwaysTraditional;
+    final FocusNode focusNode = FocusNode(debugLabel: 'Ink Focus');
+    await tester.pumpWidget(
+      Material(
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: Container(
+              width: 100,
+              height: 100,
+              child: InkResponse(
+                focusNode: focusNode,
+                radius: 20,
+                focusColor: const Color(0xff0000ff),
+                onTap: () { },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final RenderObject inkFeatures = tester.allRenderObjects.firstWhere((RenderObject object) => object.runtimeType.toString() == '_RenderInkFeatures');
+    expect(inkFeatures, paintsExactlyCountTimes(#drawCircle, 0));
+    focusNode.requestFocus();
+    await tester.pumpAndSettle();
+    expect(inkFeatures, paints..circle(radius: 20, color: const Color(0xff0000ff)));
   });
 
   testWidgets("ink response doesn't change color on focus when on touch device", (WidgetTester tester) async {
@@ -1158,5 +1190,104 @@ void main() {
     await gesture.down(tester.getCenter(find.byKey(innerKey)));
     await tester.pump(const Duration(milliseconds: 200));
     expect(material, paintsExactlyCountTimes(#drawCircle, 1));
+  });
+
+  testWidgets('disabled and hovered inkwell responds to mouse-exit', (WidgetTester tester) async {
+    int onHoverCount = 0;
+    bool hover;
+
+    Widget buildFrame({ bool enabled }) {
+      return Material(
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: SizedBox(
+              width: 100,
+              height: 100,
+              child: InkWell(
+                onTap: enabled ? () { } : null,
+                onHover: (bool value) {
+                  onHoverCount += 1;
+                  hover = value;
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(buildFrame(enabled: true));
+    final TestGesture gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer();
+    addTearDown(gesture.removePointer);
+
+    await gesture.moveTo(tester.getCenter(find.byType(InkWell)));
+    await tester.pumpAndSettle();
+    expect(onHoverCount, 1);
+    expect(hover, true);
+
+    await tester.pumpWidget(buildFrame(enabled: false));
+    await tester.pumpAndSettle();
+    await gesture.moveTo(Offset.zero);
+    // Even though the InkWell has been disabled, the mouse-exit still
+    // causes onHover(false) to be called.
+    expect(onHoverCount, 2);
+    expect(hover, false);
+
+    await gesture.moveTo(tester.getCenter(find.byType(InkWell)));
+    await tester.pumpAndSettle();
+    // We no longer see hover events because the InkWell is disabled
+    // and it's no longer in the "hovering" state.
+    expect(onHoverCount, 2);
+    expect(hover, false);
+
+    await tester.pumpWidget(buildFrame(enabled: true));
+    await tester.pumpAndSettle();
+    // The InkWell was enabled while it contained the mouse, however
+    // we do not call onHover() because it may call setState().
+    expect(onHoverCount, 2);
+    expect(hover, false);
+
+    await gesture.moveTo(tester.getCenter(find.byType(InkWell)) - const Offset(1, 1));
+    await tester.pumpAndSettle();
+    // Moving the mouse a little within the InkWell doesn't change anything.
+    expect(onHoverCount, 2);
+    expect(hover, false);
+  });
+
+  testWidgets('Changing InkWell.enabled should not trigger TextButton setState()', (WidgetTester tester) async {
+    Widget buildFrame({ bool enabled }) {
+      return Material(
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: TextButton(
+              onPressed: enabled ? () { } : null,
+              child: const Text('button'),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(buildFrame(enabled: false));
+
+    final TestGesture gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer();
+    addTearDown(gesture.removePointer);
+    await gesture.moveTo(tester.getCenter(find.byType(TextButton)));
+    await tester.pumpAndSettle();
+
+    // Rebuilding the button with enabled:true causes InkWell.didUpdateWidget()
+    // to be called per the change in its enabled flag. If onHover() was called,
+    // this test would crash.
+    await tester.pumpWidget(buildFrame(enabled: true));
+    await tester.pumpAndSettle();
+
+    // Rebuild again, with enabled:false
+    await gesture.moveBy(const Offset(1, 1));
+    await tester.pumpWidget(buildFrame(enabled: false));
+    await tester.pumpAndSettle();
   });
 }
